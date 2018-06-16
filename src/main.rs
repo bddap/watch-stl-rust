@@ -3,6 +3,9 @@ extern crate nalgebra as na;
 extern crate notify;
 extern crate stl_io;
 
+mod file_watcher;
+use file_watcher::FileRevisions;
+
 use notify::{watcher, RecursiveMode, Watcher};
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -49,15 +52,6 @@ fn to_resized_kiss_mesh(imesh: &stl_io::IndexedMesh) -> Mesh {
         })
         .collect();
     Mesh::new(vertices, indices, None, None, false)
-}
-
-fn file_watcher(filename: &Path) -> std::sync::mpsc::Receiver<notify::DebouncedEvent> {
-    let (tx, rx) = channel();
-    watcher(tx, Duration::from_secs(1))
-        .unwrap()
-        .watch(filename, RecursiveMode::NonRecursive)
-        .unwrap();
-    rx
 }
 
 fn get_bounds(mesh: &stl_io::IndexedMesh) -> (Vector3<f32>, Vector3<f32>) {
@@ -118,9 +112,13 @@ fn get_appropriate_scale(bounds: (Vector3<f32>, Vector3<f32>)) -> f32 {
 }
 
 fn swap_mesh(w: &mut Window, mut c: &mut SceneNode, f: &Path) -> SceneNode {
-    w.remove(&mut c);
     let imesh = load_stl(f);
     let mesh = to_resized_kiss_mesh(&imesh);
+    set_mesh(w, c, mesh)
+}
+
+fn set_mesh(w: &mut Window, mut c: &mut SceneNode, mesh: Mesh) -> SceneNode {
+    w.remove(&mut c);
     let mut n = w.add_mesh(Rc::new(RefCell::new(mesh)), Vector3::new(0.3, 0.3, 0.3));
     n.set_color(1.0, 0.0, 0.0);
     n
@@ -130,15 +128,21 @@ fn main() {
     use std::env;
     if let Some(flns) = env::args().nth(1) {
         let filename = Path::new(&flns);
-        let rx = file_watcher(filename);
-        let mut window = Window::new("Kiss3d: cube");
+        let mut mshs = FileRevisions::from_path(filename).unwrap().map(|fo| {
+            fo.and_then(|mut f| stl_io::read_stl(&mut f))
+                .map(|mut m| to_resized_kiss_mesh(&mut m))
+        });
+        let mut window = Window::new(&flns);
         let mut c = window.add_cube(0.1, 0.1, 0.1);
-        c = swap_mesh(&mut window, &mut c, &filename);
+        c = swap_mesh(&mut window, &mut c, filename);
         window.set_light(Light::StickToCamera);
         window.set_framerate_limit(Some(60));
         while window.render() {
-            if rx.try_recv().is_ok() {
-                c = swap_mesh(&mut window, &mut c, &filename);
+            match mshs.next() {
+                Some(Ok(mesh)) => {
+                    c = set_mesh(&mut window, &mut c, mesh);
+                }
+                _ => {}
             }
         }
     }
