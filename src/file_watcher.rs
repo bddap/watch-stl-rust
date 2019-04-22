@@ -1,5 +1,5 @@
-use notify;
-use notify::{watcher, DebouncedEvent, Error, RecommendedWatcher, RecursiveMode, Watcher};
+extern crate notify;
+use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -43,7 +43,7 @@ impl Iterator for FileRevisions {
                     Write(path) => Some(path),
                 }.map(File::open)
             }
-            Err(a) => None,
+            Err(_) => None,
         }
     }
 }
