@@ -1,6 +1,6 @@
 # Watch stl
 
-Display and stl in a naitive window. Refresh when file is modified.
+Display an stl in a native window. Refresh whenever the file is modified.
 
 ## Installation
 
