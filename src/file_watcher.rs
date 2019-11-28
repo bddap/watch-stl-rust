@@ -1,5 +1,4 @@
-use notify;
-use notify::{watcher, DebouncedEvent, Error, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -8,7 +7,7 @@ use std::time::Duration;
 
 pub struct FileRevisions {
     rx: Receiver<DebouncedEvent>,
-    watcher: RecommendedWatcher,
+    _watcher: RecommendedWatcher,
 }
 
 impl FileRevisions {
@@ -17,8 +16,8 @@ impl FileRevisions {
         let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(1))?;
         watcher.watch(filename, RecursiveMode::NonRecursive)?;
         Ok(FileRevisions {
-            rx: rx,
-            watcher: watcher,
+            rx,
+            _watcher: watcher,
         })
     }
 }
@@ -29,8 +28,9 @@ impl Iterator for FileRevisions {
     fn next(&mut self) -> Option<io::Result<File>> {
         match self.rx.try_recv() {
             Ok(event) => {
-                use notify::DebouncedEvent::{Chmod, Create, Error, NoticeRemove, NoticeWrite,
-                                             Remove, Rename, Rescan, Write};
+                use notify::DebouncedEvent::{
+                    Chmod, Create, Error, NoticeRemove, NoticeWrite, Remove, Rename, Rescan, Write,
+                };
                 match event {
                     Chmod(path) => Some(path),
                     Create(path) => Some(path),
@@ -41,17 +41,10 @@ impl Iterator for FileRevisions {
                     Rename(_, path) => Some(path),
                     Rescan => None,
                     Write(path) => Some(path),
-                }.map(File::open)
+                }
+                .map(File::open)
             }
-            Err(a) => None,
+            Err(_) => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn fake_test() {
-        assert_eq!(2 + 2, 4);
     }
 }
