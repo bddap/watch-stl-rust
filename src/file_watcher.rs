@@ -1,19 +1,16 @@
-use notify::{DebouncedEvent, RecommendedWatcher, RecursiveMode, Watcher};
-use std::fs::File;
-use std::io;
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver};
-use std::time::Duration;
+use std::sync::mpsc::{channel, Receiver, TryRecvError};
 
 pub struct FileRevisions {
-    rx: Receiver<DebouncedEvent>,
+    rx: Receiver<notify::Result<Event>>,
     _watcher: RecommendedWatcher,
 }
 
 impl FileRevisions {
     pub fn from_path(filename: &Path) -> notify::Result<Self> {
-        let (tx, rx) = channel();
-        let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(1))?;
+        let (tx, rx) = channel::<notify::Result<Event>>();
+        let mut watcher: RecommendedWatcher = Watcher::new(tx, Default::default())?;
         watcher.watch(filename, RecursiveMode::NonRecursive)?;
         Ok(FileRevisions {
             rx,
@@ -22,29 +19,19 @@ impl FileRevisions {
     }
 }
 
-impl Iterator for FileRevisions {
-    type Item = io::Result<File>;
-
-    fn next(&mut self) -> Option<io::Result<File>> {
-        match self.rx.try_recv() {
-            Ok(event) => {
-                use notify::DebouncedEvent::{
-                    Chmod, Create, Error, NoticeRemove, NoticeWrite, Remove, Rename, Rescan, Write,
-                };
-                match event {
-                    Chmod(path) => Some(path),
-                    Create(path) => Some(path),
-                    Error(_, _) => None, // TODO: Handle this
-                    NoticeRemove(path) => Some(path),
-                    NoticeWrite(path) => Some(path),
-                    Remove(path) => Some(path),
-                    Rename(_, path) => Some(path),
-                    Rescan => None,
-                    Write(path) => Some(path),
+impl FileRevisions {
+    pub fn changed(&mut self) -> anyhow::Result<bool> {
+        let mut ret = false;
+        loop {
+            match self.rx.try_recv() {
+                Ok(Ok(_event)) => ret = true,
+                Ok(Err(e)) => return Err(e.into()),
+                Err(TryRecvError::Empty) => {
+                    break;
                 }
-                .map(File::open)
+                Err(TryRecvError::Disconnected) => panic!(),
             }
-            Err(_) => None,
         }
+        Ok(ret)
     }
 }

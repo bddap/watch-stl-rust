@@ -2,11 +2,11 @@ mod file_watcher;
 
 use file_watcher::FileRevisions;
 use kiss3d::light::Light;
+use kiss3d::nalgebra as na;
 use kiss3d::resource::Mesh;
 use kiss3d::scene::SceneNode;
 use kiss3d::window::Window;
 use na::{Point3, Vector3};
-use nalgebra as na;
 use std::cell::RefCell;
 use std::fs::File;
 use std::path::Path;
@@ -21,7 +21,7 @@ fn to_resized_kiss_mesh(imesh: &stl_io::IndexedMesh) -> Mesh {
     let bounds = get_bounds(imesh);
     let center = get_center(bounds);
     let scale = get_appropriate_scale(bounds);
-    let vertices = imesh
+    let vertices: Vec<Point3<f32>> = imesh
         .vertices
         .iter()
         .map(|v| {
@@ -32,7 +32,7 @@ fn to_resized_kiss_mesh(imesh: &stl_io::IndexedMesh) -> Mesh {
             )
         })
         .collect();
-    let indices = imesh
+    let indices: Vec<Point3<u16>> = imesh
         .faces
         .iter()
         .map(|it| {
@@ -122,26 +122,29 @@ fn set_mesh(w: &mut Window, mut c: &mut SceneNode, mesh: Mesh) -> SceneNode {
     n
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     use std::env;
-    if let Some(flns) = env::args().nth(1) {
-        let filename = Path::new(&flns);
-        let mut mshs = FileRevisions::from_path(filename).unwrap().map(|fo| {
-            fo.and_then(|mut f| stl_io::read_stl(&mut f))
-                .map(|mut m| to_resized_kiss_mesh(&mut m))
-        });
-        let mut window = Window::new(&flns);
-        let mut c = window.add_cube(0.1, 0.1, 0.1);
-        c = swap_mesh(&mut window, &mut c, filename);
-        window.set_light(Light::StickToCamera);
-        window.set_framerate_limit(Some(60));
-        while window.render() {
-            match mshs.next() {
-                Some(Ok(mesh)) => {
-                    c = set_mesh(&mut window, &mut c, mesh);
-                }
-                _ => {}
-            }
+    let Some(flns) = env::args().nth(1) else {
+        return Err(anyhow::anyhow!("no file name given"));
+    };
+
+    let filename = Path::new(&flns);
+    let mut watch = FileRevisions::from_path(filename)?;
+    let mut window = Window::new(&flns);
+    let mut c = window.add_cube(0.1, 0.1, 0.1);
+    c = swap_mesh(&mut window, &mut c, filename);
+    window.set_light(Light::StickToCamera);
+    window.set_framerate_limit(Some(60));
+
+    while window.render() {
+        if !watch.changed()? {
+            continue;
         }
+        let mut file = File::open(filename)?;
+        let stl = stl_io::read_stl(&mut file)?;
+        let mesh = to_resized_kiss_mesh(&stl);
+        set_mesh(&mut window, &mut c, mesh);
     }
+
+    Ok(())
 }
