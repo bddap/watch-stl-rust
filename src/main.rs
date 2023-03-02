@@ -8,12 +8,14 @@ use kiss3d::scene::SceneNode;
 use kiss3d::window::Window;
 use na::{Point3, Vector3};
 use std::cell::RefCell;
+use std::convert::TryInto;
 use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;
+use stl_io::IndexedMesh;
 
 fn load_stl(filename: &Path) -> stl_io::IndexedMesh {
-    let mut f = File::open(&filename).expect("file not found");
+    let mut f = File::open(filename).expect("file not found");
     stl_io::read_stl(&mut f).expect("can't read")
 }
 
@@ -36,10 +38,15 @@ fn to_resized_kiss_mesh(imesh: &stl_io::IndexedMesh) -> Mesh {
         .faces
         .iter()
         .map(|it| {
+            // kiss3d apparently can't handle very large meshes. It uses u16 for indices.
+            // A future workaround could be to split into multiple meshes.
+            let err_msg = "This mesh is too large, consider pestering bddap for \
+                           large mesh support: \
+                           https://github.com/bddap/watch-stl-rust/issues";
             Point3::new(
-                it.vertices[0] as u16, // may panic on very large meshes
-                it.vertices[1] as u16,
-                it.vertices[2] as u16,
+                it.vertices[0].try_into().expect(err_msg),
+                it.vertices[1].try_into().expect(err_msg),
+                it.vertices[2].try_into().expect(err_msg),
             )
         })
         .collect();
@@ -47,53 +54,24 @@ fn to_resized_kiss_mesh(imesh: &stl_io::IndexedMesh) -> Mesh {
 }
 
 fn get_bounds(mesh: &stl_io::IndexedMesh) -> (Vector3<f32>, Vector3<f32>) {
-    let max_x = mesh
-        .vertices
-        .iter()
-        .map(|v| v[0])
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-        .expect("zero length mesh");
-    let max_y = mesh
-        .vertices
-        .iter()
-        .map(|v| v[1])
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-        .expect("zero length mesh");
-    let max_z = mesh
-        .vertices
-        .iter()
-        .map(|v| v[2])
-        .max_by(|a, b| a.partial_cmp(b).unwrap())
-        .expect("zero length mesh");
-    let min_x = mesh
-        .vertices
-        .iter()
-        .map(|v| v[0])
-        .max_by(|b, a| a.partial_cmp(b).unwrap())
-        .expect("zero length mesh");
-    let min_y = mesh
-        .vertices
-        .iter()
-        .map(|v| v[1])
-        .max_by(|b, a| a.partial_cmp(b).unwrap())
-        .expect("zero length mesh");
-    let min_z = mesh
-        .vertices
-        .iter()
-        .map(|v| v[2])
-        .max_by(|b, a| a.partial_cmp(b).unwrap())
-        .expect("zero length mesh");
-    (
-        Vector3::new(min_x, min_y, min_z),
-        Vector3::new(max_x, max_y, max_z),
-    )
+    let mut min = Vector3::new(std::f32::MAX, std::f32::MAX, std::f32::MAX);
+    let mut max = Vector3::new(std::f32::MIN, std::f32::MIN, std::f32::MIN);
+    for v in &mesh.vertices {
+        min.x = min.x.min(v[0]);
+        min.y = min.y.min(v[1]);
+        min.z = min.z.min(v[2]);
+        max.x = max.x.max(v[0]);
+        max.y = max.y.max(v[1]);
+        max.z = max.z.max(v[2]);
+    }
+    (min, max)
 }
 
 fn get_center(bounds: (Vector3<f32>, Vector3<f32>)) -> Vector3<f32> {
     let mut center = bounds.0 + bounds.1;
-    center.x = center.x / 2.0;
-    center.y = center.y / 2.0;
-    center.z = center.z / 2.0;
+    center.x /= 2.0;
+    center.y /= 2.0;
+    center.z /= 2.0;
     center
 }
 
@@ -106,20 +84,20 @@ fn get_appropriate_scale(bounds: (Vector3<f32>, Vector3<f32>)) -> f32 {
     if m > diff.z.abs() {
         m = diff.z.abs();
     }
-    return 1.0 / m;
+    1.0 / m
 }
 
-fn swap_mesh(w: &mut Window, c: &mut SceneNode, f: &Path) -> SceneNode {
+fn swap_mesh(w: &mut Window, c: &mut SceneNode, f: &Path) {
     let imesh = load_stl(f);
     let mesh = to_resized_kiss_mesh(&imesh);
     set_mesh(w, c, mesh)
 }
 
-fn set_mesh(w: &mut Window, mut c: &mut SceneNode, mesh: Mesh) -> SceneNode {
-    w.remove_node(&mut c);
+fn set_mesh(w: &mut Window, c: &mut SceneNode, mesh: Mesh) {
+    w.remove_node(c);
     let mut n = w.add_mesh(Rc::new(RefCell::new(mesh)), Vector3::new(0.3, 0.3, 0.3));
     n.set_color(1.0, 0.0, 0.0);
-    n
+    *c = n;
 }
 
 fn main() -> anyhow::Result<()> {
@@ -132,7 +110,7 @@ fn main() -> anyhow::Result<()> {
     let mut watch = FileRevisions::from_path(filename)?;
     let mut window = Window::new(&flns);
     let mut c = window.add_cube(0.1, 0.1, 0.1);
-    c = swap_mesh(&mut window, &mut c, filename);
+    swap_mesh(&mut window, &mut c, filename);
     window.set_light(Light::StickToCamera);
     window.set_framerate_limit(Some(60));
 
@@ -141,10 +119,18 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
         let mut file = File::open(filename)?;
-        let stl = stl_io::read_stl(&mut file)?;
+        let stl = stl_io::read_stl(&mut file).unwrap_or_else(|_| unloadable_mesh());
         let mesh = to_resized_kiss_mesh(&stl);
         set_mesh(&mut window, &mut c, mesh);
     }
 
     Ok(())
+}
+
+/// this is what is displayed when a mesh cann't be loaded
+fn unloadable_mesh() -> IndexedMesh {
+    IndexedMesh {
+        vertices: Vec::new(),
+        faces: Vec::new(),
+    }
 }
