@@ -3,6 +3,7 @@ name = "watch-stl"
 version = "0.1.2"
 authors = ["Andrew Dirksen <andrew@dirksen.com>"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 stl_io = "0.7.0"
